@@ -72,6 +72,14 @@ def _key_from_file() -> bytes:
         if key is not None:
             return key
         logger.warning("master key file %s is unusable; writing a fresh key", f)
+    elif paths.session_file().exists() or paths.vault_file().exists():
+        # Encrypted state exists but no key file: it was encrypted with a keyring key we cannot
+        # reach right now. Minting a new random key here could never decrypt it and would only
+        # mislead every later run, so refuse instead.
+        raise SessionError(
+            "Secret Service (keyring) is unreachable and the stored session was encrypted with a "
+            "keyring key. Run this from inside your desktop session (DBUS_SESSION_BUS_ADDRESS set) "
+            "or unlock the login keyring, then retry.")
     key = nacl.utils.random(_KEY_SIZE)
     _write_private(f, base64.b64encode(key))
     logger.warning("Stored master key at %s (0600) - less safe than the keyring", f)
