@@ -32,6 +32,7 @@ def authenticate(gsa: GSAClient, username: str, password: str,
             gsa.submit_sms_factor(twofa("sms"), dsid, idms)
 
         # Re-authenticate: the device is now trusted, so this should NOT prompt again.
+        logger.debug("2FA accepted; re-authenticating with the same device/anisette identity")
         r, spd = gsa.authenticate(
             username, password, "re-auth after 2FA (password already verified)")
         if r.get("Status", {}).get("au"):

@@ -209,13 +209,16 @@ def cmd_login(args) -> int:
     if not args.no_save_password:
         record["password"] = password   # in the keyring-encrypted session; enables silent refresh
 
-    try:
-        _ensure_web_session(record, interactive=True, password=password)
-        # Bank the trust token now so a later failure in this login need not re-prompt 2FA.
-        session.save(record)
-    except Exception as e:  # noqa: BLE001 - never let the 2FA bootstrap abort sign-in
-        log.warning("web-session 2FA bootstrap failed: %s", e)
-        ui.warn(f"could not pre-clear 2FA via the web session: {e}")
+    if args.no_web:
+        ui.out("skipping the iCloud web session (--no-web); Hide My Email aliases load on first `icp show`")
+    else:
+        try:
+            _ensure_web_session(record, interactive=True, password=password)
+            # Bank the trust token now so a later failure in this login need not re-prompt 2FA.
+            session.save(record)
+        except Exception as e:  # noqa: BLE001 - never let the 2FA bootstrap abort sign-in
+            log.warning("web-session 2FA bootstrap failed: %s", e)
+            ui.warn(f"could not pre-clear 2FA via the web session: {e}")
 
     # SRP login + mint the mmeAuthToken (the one hop that needs the password).
     mme_ok = False
@@ -718,6 +721,9 @@ def main(argv=None) -> int:
                     help="don't store the password for silent token refresh (re-login manually "
                          "each time the ~7-day token expires)")
     lp.add_argument("--debug", action="store_true", help="write a redacted debug transcript")
+    lp.add_argument("--no-web", action="store_true",
+                    help="skip the iCloud web-session sign-in during login (one 2FA push instead "
+                         "of two; Hide My Email aliases are fetched later by `icp show`)")
     lp.set_defaults(func=cmd_login)
 
     sp = sub.add_parser(

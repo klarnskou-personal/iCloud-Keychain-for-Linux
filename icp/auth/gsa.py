@@ -188,5 +188,7 @@ def _check_code(resp, kind: str) -> None:
         body = plist.loads(resp.content)
     except Exception:  # noqa: BLE001 - a rejected identity token answers 401 with no body
         body = {}
+    logger.debug("%s 2FA validate -> HTTP %s body=%r", kind, resp.status_code,
+                 body if body else resp.content[:200])
     if body.get("ec") or not resp.ok:
         raise GSAError(f"{kind} 2FA code rejected: {body.get('em') or resp.status_code}")
