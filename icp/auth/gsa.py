@@ -9,6 +9,7 @@ import base64
 import hashlib
 import hmac
 import logging
+import time
 import plistlib as plist
 
 import requests
@@ -62,11 +63,28 @@ class GSAClient:
             "User-Agent": const.GSA_USER_AGENT,
             "X-MMe-Client-Info": const.GSA_CLIENT_INFO,
         }
-        resp = requests.post(
-            const.GSA_ENDPOINT, headers=headers, data=plist.dumps(body),
-            verify=tls.ca_bundle(), timeout=10,
-        )
-        return plist.loads(resp.content)["Response"]
+        data = plist.dumps(body)
+        # GsService2 occasionally answers a burst of sign-ins with an HTML 503 instead of a
+        # plist (seen on the SRP `complete` right after a successful login). Retry briefly with
+        # backoff before giving up, and surface what Apple sent rather than a plistlib traceback.
+        last = None
+        for attempt, pause in enumerate((0, 2, 5, 10)):
+            if pause:
+                logger.debug("GSA %s: retrying in %ss after %s", parameters.get("o"), pause, last)
+                time.sleep(pause)
+            resp = requests.post(
+                const.GSA_ENDPOINT, headers=headers, data=data,
+                verify=tls.ca_bundle(), timeout=10,
+            )
+            try:
+                return plist.loads(resp.content)["Response"]
+            except Exception:  # noqa: BLE001 - not a plist (HTML error page) or no Response key
+                snippet = resp.content[:160].decode("utf-8", "replace").replace("\n", " ")
+                last = f"HTTP {resp.status_code}: {snippet!r}"
+                if resp.status_code < 500 and resp.status_code != 429:
+                    break
+        raise GSAError(f"GsService2 {parameters.get('o')} returned no plist ({last}); "
+                       "Apple may be throttling repeated sign-ins - wait a few minutes and retry")
 
     def authenticate(self, username: str, password: str, stage: str) -> tuple[dict, dict]:
         usr = srp.User(username, bytes(), hash_alg=srp.SHA256, ng_type=srp.NG_2048)

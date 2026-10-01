@@ -538,7 +538,12 @@ def _join_and_sync(s: dict, device, anisette, username: str, password: str) -> i
         ui.step("Discovering escrow bottles...")
         # A PET here only lists device metadata via GETRECORDS (non-destructive, spends no
         # attempt) so the user can see WHICH device each bottle belongs to before choosing.
-        list_pet, list_pet_expiry = _mint_pet(device, anisette, username, password)
+        # Login just minted a PET (5-min lifetime, saved in the session); reuse it while it has
+        # over a minute left instead of running a second SRP sign-in seconds after the first,
+        # which GsService2 tends to answer with a 503.
+        list_pet, list_pet_expiry = s.get("pet"), s.get("pet_expiry")
+        if not (list_pet and list_pet_expiry and list_pet_expiry - time.time() * 1000 > 60_000):
+            list_pet, list_pet_expiry = _mint_pet(device, anisette, username, password)
         bottles = client.list_recoverable_bottles(escrow_host, username, list_pet, warn=ui.warn)
     except (OctagonError, CloudKitError, GSAError, AnisetteError) as e:
         ui.err(str(e))
