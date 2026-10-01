@@ -108,7 +108,12 @@ class GSAClient:
         self.last_complete_response = complete
         logger.debug("GSA complete response keys: %s", list(complete))
         if "M2" not in complete:
-            raise GSAError(f"{stage}: complete failed: {_status(complete)}")
+            msg = f"{stage}: complete failed: {_status(complete)}"
+            if complete.get("Status", {}).get("ec") == -22406:
+                msg += ("\n  note: Apple returns this same code when it throttles repeated sign-ins "
+                        "from one device (seen after ~5 attempts within half an hour). If the "
+                        "password is right, wait 30+ minutes before trying again.")
+            raise GSAError(msg)
         usr.verify_session(complete["M2"])
         if not usr.authenticated():
             raise GSAError("server session verification failed (imposter?)")
