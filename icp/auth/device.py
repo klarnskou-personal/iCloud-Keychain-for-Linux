@@ -49,7 +49,7 @@ class Device:
     def meta_headers(self) -> dict:
         """Fallback identity headers; anisette values override the X-Apple-I-MD* ones."""
         now = datetime.now(timezone.utc).replace(microsecond=0)
-        loc = (locale.getdefaultlocale()[0] or "en_US")
+        loc = (locale.getlocale()[0] or "en_US")
         return {
             "X-Apple-I-Client-Time": now.isoformat().replace("+00:00", "Z"),
             "X-Apple-I-TimeZone": "UTC",

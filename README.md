@@ -14,6 +14,37 @@ reverse engineering attempt and **is not affiliated with Apple in any way**.
 > This is also **untested** with Advanced Data Protection enabled. Any help with this will be appreciated -
 > let me know if you have any issues with ADP enabled (also lmk if it works). Please don't spam escrow attempts!
 
+## Omarchy fork
+
+This fork ([klarnskou-personal/iCloud-Keychain-for-Linux](https://github.com/klarnskou-personal/iCloud-Keychain-for-Linux))
+is set up for [Omarchy](https://omarchy.org) (Arch Linux + Hyprland). Install everything in one go:
+
+```
+git clone https://github.com/klarnskou-personal/iCloud-Keychain-for-Linux ~/Projects/iCloud-Keychain-for-Linux
+cd ~/Projects/iCloud-Keychain-for-Linux && ./install-omarchy.sh
+icp login
+```
+
+Then load `extension/` as an unpacked extension in Chrome/Chromium/Brave (`chrome://extensions`,
+Developer mode, **Load unpacked**). The native host is already registered for the ID that folder
+gets, so no copy-pasting of IDs.
+
+What differs from upstream:
+
+- **TLS certificate verification is on** for every Apple request. Upstream used `verify=False`
+  for the sign-in endpoints because `gsa.apple.com` chains to Apple's own root CA, which public
+  bundles lack. This fork ships that root (`icp/certs/`, fingerprint-pinned) and verifies against
+  certifi + Apple Root CA instead (`icp/tls.py`). `ICP_CA_BUNDLE` overrides it.
+- **Login works again**: includes the client-identity fix from upstream PR #9 (Apple started
+  returning 503 for the Xcode client identity).
+- **Anisette as a systemd service** (`omarchy/icp-anisette.service`): runs the Docker image as
+  root under systemd, bound to `127.0.0.1` with a persistent volume, so you never need to be in the
+  `docker` group (Omarchy keeps you out of it on purpose).
+- `host/install.sh` computes the Chromium extension ID itself and also knows Edge and Vivaldi.
+- `icp` is linked into `~/.local/bin`.
+
+Everything below is the upstream README and still applies.
+
 ## What you'll need
 
 An **anisette server** running on your machine. Apple's sign-in needs a small piece of data that

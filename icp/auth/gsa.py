@@ -13,11 +13,10 @@ import plistlib as plist
 
 import requests
 import srp._pysrp as srp
-import urllib3
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from .. import const
+from .. import const, tls
 from .anisette import Anisette
 from .device import Device
 from .headers import identity_headers
@@ -26,7 +25,6 @@ from ..errors import AppleError
 # Apple's SRP variant.
 srp.rfc5054_enable()
 srp.no_username_in_x()
-urllib3.disable_warnings()
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +64,7 @@ class GSAClient:
         }
         resp = requests.post(
             const.GSA_ENDPOINT, headers=headers, data=plist.dumps(body),
-            verify=False, timeout=10,
+            verify=tls.ca_bundle(), timeout=10,
         )
         return plist.loads(resp.content)["Response"]
 
@@ -106,7 +104,7 @@ class GSAClient:
         resp = requests.get(
             "https://gsa.apple.com/auth/verify/trusteddevice",
             headers=self._twofa_headers(dsid, idms_token),
-            verify=False, timeout=10,
+            verify=tls.ca_bundle(), timeout=10,
         )
         return resp.ok
 
@@ -115,7 +113,7 @@ class GSAClient:
         h["security-code"] = code
         resp = requests.get(
             "https://gsa.apple.com/grandslam/GsService2/validate",
-            headers=h, verify=False, timeout=10,
+            headers=h, verify=tls.ca_bundle(), timeout=10,
         )
         _check_code(resp, "trusted-device")
 
@@ -124,7 +122,7 @@ class GSAClient:
             "https://gsa.apple.com/auth/verify/phone/",
             json={"phoneNumber": {"id": phone_id}, "mode": "sms"},
             headers=self._twofa_headers(dsid, idms_token),
-            verify=False, timeout=10,
+            verify=tls.ca_bundle(), timeout=10,
         )
 
     def submit_sms_factor(self, code: str, dsid: str, idms_token: str, phone_id: int = 1) -> None:
@@ -136,7 +134,7 @@ class GSAClient:
         resp = requests.post(
             "https://gsa.apple.com/auth/verify/phone/securitycode",
             json=body, headers=self._twofa_headers(dsid, idms_token),
-            verify=False, timeout=10,
+            verify=tls.ca_bundle(), timeout=10,
         )
         _check_code(resp, "SMS")
 

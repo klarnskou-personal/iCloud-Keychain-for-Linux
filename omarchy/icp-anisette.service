@@ -1,0 +1,29 @@
+# Anisette server for icp, run as a system service through Omarchy's socket-activated Docker.
+#
+# Omarchy deliberately keeps the user out of the `docker` group (membership is root-equivalent),
+# so instead of `docker run -d --restart=always` from the user's shell, systemd owns the container
+# as root. It binds to localhost only and keeps the provisioning state in a named volume so Apple
+# sees the same "machine" across restarts (otherwise every reboot would re-trigger 2FA).
+#
+# Installed by ./install-omarchy.sh to /etc/systemd/system/icp-anisette.service
+[Unit]
+Description=Anisette server for icp (iCloud Keychain for Linux)
+Documentation=https://github.com/Dadoum/anisette-v3-server
+Requires=docker.socket
+After=docker.socket network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm -f icp-anisette
+ExecStart=/usr/bin/docker run --rm --name icp-anisette \
+  -p 127.0.0.1:6969:6969 \
+  -v icp-anisette-data:/home/Alcoholic/.config/anisette-v3/lib/ \
+  dadoum/anisette-v3-server:latest
+ExecStop=/usr/bin/docker stop icp-anisette
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
