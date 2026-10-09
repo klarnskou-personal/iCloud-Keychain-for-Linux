@@ -409,6 +409,12 @@ def _maybe_trigger_sync() -> None:
         attempt = paths.sync_attempt_file()
         if attempt.exists() and (time.time() - attempt.stat().st_mtime) < 300:
             return  # already triggered recently
+        # After a failed sync, back off: retrying a rejected sign-in every few minutes keeps
+        # Apple's GSA throttle (-22406/-22421) engaged. A manual `icp sync` still runs.
+        failed = paths.sync_failed_file()
+        backoff = int(os.environ.get("ICP_SYNC_FAIL_BACKOFF", str(6 * 3600)))
+        if failed.exists() and (time.time() - failed.stat().st_mtime) < backoff:
+            return
         attempt.touch()
         subprocess.Popen(
             [sys.executable, "-m", "icp.cli.app", "sync"],

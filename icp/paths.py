@@ -39,3 +39,7 @@ def sync_lock_file() -> Path:
 
 def sync_attempt_file() -> Path:
     return config_dir() / "sync.attempt"
+
+
+def sync_failed_file() -> Path:
+    return config_dir() / "sync.failed"

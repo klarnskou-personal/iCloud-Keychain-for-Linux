@@ -603,10 +603,7 @@ def cmd_sync(args) -> int:
     Guarded by a non-blocking file lock so the periodic background trigger and a manual run
     can never overlap (a second sync exits immediately rather than racing on the vault)."""
     import fcntl
-    from ..octagon import client as octagon
-    from ..octagon.client import OctagonError
-    from ..transport.cloudkit import CloudKitError
-    from ..paths import sync_lock_file
+    from ..paths import sync_failed_file, sync_lock_file
 
     lock = open(sync_lock_file(), "w")
     try:
@@ -616,42 +613,57 @@ def cmd_sync(args) -> int:
         return 0
 
     try:
-        s = session.load()
-        if not s:
-            ui.err("not signed in - run: icp login")
-            return 1
-        if not (s.get("octagon") or {}).get("peer_id"):
-            ui.err("not joined to the keychain - run: icp login")
-            return 1
-        device = Device.load_or_create()
-        anisette = Anisette(args.anisette)
-        # The cached cloudKitToken is short-lived; re-mint it from the mmeAuthToken before every
-        # sync. If the mmeAuthToken has also expired, _ensure_fresh_tokens silently re-authenticates
-        # with the saved password (no manual login), unless 2FA is required or no password is saved.
-        try:
-            _ensure_fresh_tokens(s, device, anisette, interactive=sys.stdin.isatty())
-            session.save(s)  # persist any freshly re-minted tokens
-        except (icloud.ICloudError, AnisetteError, GSAError) as e:
-            ui.err(f"could not refresh the iCloud token: {e}")
-            return 1
-        try:
-            client = octagon.OctagonClient(s, device, anisette)
-            session.save(s)  # persist the refreshed cloudKitToken + cloudKitUserId from ckAppInit
-            n = client.sync_and_decrypt()
-        except (OctagonError, CloudKitError) as e:
-            ui.err(f"sync failed: {e}")
-            return 1
-        ui.out(f"Synced {n} credential(s) into the vault.")
-        # Best-effort, never interactive: refresh the Hide My Email cache only while the web
-        # session's trust is still valid, otherwise keep the cache. Its 2FA is handled at login
-        # (cmd_login), so sync never prompts - see _fetch_aliases_best_effort.
-        n_aliases = len(_fetch_aliases_best_effort(interactive=False))
-        if n_aliases:
-            ui.out(f"Cached {n_aliases} Hide My Email alias(es).")
-        return 0
+        rc = _sync_locked(args)
+        # Record failures so the native host's auto-sync backs off (vault/host.py).
+        failed = sync_failed_file()
+        if rc:
+            failed.touch()
+        else:
+            failed.unlink(missing_ok=True)
+        return rc
     finally:
         fcntl.flock(lock, fcntl.LOCK_UN)
         lock.close()
+
+
+def _sync_locked(args) -> int:
+    """The body of `icp sync`, run while cmd_sync holds the sync lock."""
+    from ..octagon import client as octagon
+    from ..octagon.client import OctagonError
+    from ..transport.cloudkit import CloudKitError
+    s = session.load()
+    if not s:
+        ui.err("not signed in - run: icp login")
+        return 1
+    if not (s.get("octagon") or {}).get("peer_id"):
+        ui.err("not joined to the keychain - run: icp login")
+        return 1
+    device = Device.load_or_create()
+    anisette = Anisette(args.anisette)
+    # The cached cloudKitToken is short-lived; re-mint it from the mmeAuthToken before every
+    # sync. If the mmeAuthToken has also expired, _ensure_fresh_tokens silently re-authenticates
+    # with the saved password (no manual login), unless 2FA is required or no password is saved.
+    try:
+        _ensure_fresh_tokens(s, device, anisette, interactive=sys.stdin.isatty())
+        session.save(s)  # persist any freshly re-minted tokens
+    except (icloud.ICloudError, AnisetteError, GSAError) as e:
+        ui.err(f"could not refresh the iCloud token: {e}")
+        return 1
+    try:
+        client = octagon.OctagonClient(s, device, anisette)
+        session.save(s)  # persist the refreshed cloudKitToken + cloudKitUserId from ckAppInit
+        n = client.sync_and_decrypt()
+    except (OctagonError, CloudKitError) as e:
+        ui.err(f"sync failed: {e}")
+        return 1
+    ui.out(f"Synced {n} credential(s) into the vault.")
+    # Best-effort, never interactive: refresh the Hide My Email cache only while the web
+    # session's trust is still valid, otherwise keep the cache. Its 2FA is handled at login
+    # (cmd_login), so sync never prompts - see _fetch_aliases_best_effort.
+    n_aliases = len(_fetch_aliases_best_effort(interactive=False))
+    if n_aliases:
+        ui.out(f"Cached {n_aliases} Hide My Email alias(es).")
+    return 0
 
 
 def _ensure_web_session(s: dict, *, interactive: bool, password: str | None = None):
