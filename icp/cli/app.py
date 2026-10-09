@@ -210,7 +210,7 @@ def cmd_login(args) -> int:
         record["password"] = password   # in the keyring-encrypted session; enables silent refresh
 
     if args.no_web:
-        ui.out("skipping the iCloud web session (--no-web); Hide My Email aliases load on first `icp show`")
+        ui.out("skipping the iCloud web session (--no-web); Hide My Email aliases load on first `icp show --plain`")
     else:
         try:
             _ensure_web_session(record, interactive=True, password=password)
@@ -349,6 +349,9 @@ def cmd_show(args) -> int:
     """
     from ..vault.store import load_vault
 
+    debug_path = diag.start() if args.debug else None
+    if debug_path:
+        ui.step(f"Debug transcript (redacted): {debug_path}")
     try:
         store = load_vault()
     except Exception as e:  # noqa: BLE001 - surface keyring/decrypt failures cleanly
@@ -698,7 +701,7 @@ def _ensure_web_session(s: dict, *, interactive: bool, password: str | None = No
         if sess.needs_2fa:
             if not interactive:
                 raise webauth.WebAuthError(
-                    "Apple asked for a 2FA code for the web session - run `icp show` "
+                    "Apple asked for a 2FA code for the web session - run `icp show --plain` "
                     "from a terminal once to establish trust")
             sess.request_push_notification()  # the 409 no longer auto-sends this on its own
             sess.submit_2fa(_twofa_prompt("trusted"))
@@ -751,7 +754,10 @@ def main(argv=None) -> int:
     sp.add_argument("-s", "--show-passwords", action="store_true",
                     help="reveal passwords in plain output")
     sp.add_argument("--plain", action="store_true",
-                    help="print plain text instead of the interactive TUI")
+                    help="print plain text instead of the interactive TUI (also refreshes Hide My "
+                         "Email aliases, prompting for the web session's 2FA once)")
+    sp.add_argument("--debug", action="store_true",
+                    help="write a redacted debug transcript of the web-session sign-in")
     sp.set_defaults(func=cmd_show)
 
     sub.add_parser("sync", help="re-fetch and decrypt the keychain into the vault"

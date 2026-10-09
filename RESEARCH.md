@@ -433,6 +433,16 @@ the `409` from `signin/complete`; a recent change ([rclone](https://github.com/r
 "iOS 26.4+") means the client must now explicitly request it via
 `PUT verify/trusteddevice/securitycode` before prompting for the code.
 
+The same change made a *valid* code come back as HTTP 409 from
+`POST verify/trusteddevice/securitycode`: the body says `"securityCode": {"valid": true}` and the
+response carries a fresh `X-Apple-Session-Token`. When that 409 also has `X-Apple-EDP` (or
+`X-Apple-PDP`), the session is not signed in yet: the client must repeat the password proof via
+`POST escrow/init` (`{a, accountName: "", protocols}`, answered like `signin/init`) and
+`POST escrow/complete` (`{m1, m2, c, k}`, where `k` is the SRP session key), which returns another
+session token. A 409 with those headers on `signin/complete` means the trust token was accepted
+and only escrow is needed. Observed 2026-10-09; matches
+[icloud-photos-sync#1124](https://github.com/steilerDev/icloud-photos-sync/pull/1124).
+
 The alias API (`hme/client.py`, ported from
 [dedoussis/icloud-hide-my-email-browser-extension](https://github.com/dedoussis/icloud-hide-my-email-browser-extension))
 is JSON REST:

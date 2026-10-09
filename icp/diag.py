@@ -24,6 +24,8 @@ def redact(value, key: str = ""):
         return [redact(v, key) for v in value]
     if isinstance(value, str):
         low = key.lower()
+        if low == "code":  # 2FA security codes are short, so the length rule below misses them
+            return f"<redacted:{len(value)}>"
         if any(h in low for h in _SECRET_HINTS) and len(value) > 8:
             return f"<redacted:{len(value)}>"
         if len(value) > 80:

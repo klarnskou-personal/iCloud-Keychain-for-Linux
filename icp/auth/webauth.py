@@ -8,12 +8,15 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 
 import requests
 import srp._pysrp as srp
 
 from ..errors import AppleError
-from .. import tls
+from .. import diag, tls
+
+log = logging.getLogger(__name__)
 
 srp.rfc5054_enable()
 srp.no_username_in_x()
@@ -118,6 +121,13 @@ class WebAuthSession:
                 "Referer": ICLOUD_ORIGIN + "/"}
 
     def _capture(self, resp: requests.Response) -> None:
+        # Redacted request/response trail for `--debug` transcripts (diag.start()).
+        log.debug("%s %s -> HTTP %s; headers=%s", resp.request.method,
+                  resp.request.path_url.split("?")[0], resp.status_code,
+                  sorted(h for h in resp.headers if h in _HEADER_DATA or h.startswith("X-Apple")))
+        body = self._json_or_none(resp)
+        if body is not None:
+            diag.dump(log, f"{resp.request.method} {resp.request.path_url.split('?')[0]} body", body)
         for header, key in _HEADER_DATA.items():
             if resp.headers.get(header):
                 self.session_data[key] = resp.headers[header]
@@ -180,17 +190,11 @@ class WebAuthSession:
         self._auth_start()
         self._federate(username)
 
+        self._password = password  # in memory only, for a possible escrow proof (_escrow)
         usr = srp.User(username, bytes(), hash_alg=srp.SHA256, ng_type=srp.NG_2048)
         a_bytes = usr.A.to_bytes(_SRP_N_LEN, "big")
         init = self._srp_init(username, a_bytes)
-
-        salt = base64.b64decode(init["salt"])
-        b_bytes = base64.b64decode(init["b"])
-        usr.p = _derive_password_key(password, salt, init["iteration"], init["protocol"])
-        m1 = usr.process_challenge(salt, b_bytes)
-        if m1 is None:
-            raise WebAuthError("SRP challenge processing failed (invalid server-supplied B)")
-        m2 = usr.H_AMK
+        m1, m2 = _srp_proof(usr, password, init)
 
         resp = self._post(
             f"{AUTH_ENDPOINT}/signin/complete", headers=self._auth_headers(),
@@ -198,6 +202,11 @@ class WebAuthSession:
             body={"accountName": username, "m1": base64.b64encode(m1).decode(),
                   "m2": base64.b64encode(m2).decode(), "c": init["c"], "rememberMe": True,
                   "trustTokens": [trust_token] if trust_token else []})
+        if resp.status_code == 409 and _requires_escrow(resp):
+            # Since iOS 26.4: the trust token was accepted, but Apple wants the escrow proof.
+            self._escrow()
+            self.needs_2fa = False
+            return
         if resp.status_code == 409:
             self.needs_2fa = True
             return
@@ -224,13 +233,49 @@ class WebAuthSession:
         resp = self._post(f"{AUTH_ENDPOINT}/verify/trusteddevice/securitycode",
                           headers=self._auth_headers(), body={"securityCode": {"code": code}})
         data = self._json_or_none(resp)
-        if not resp.ok:
+        if resp.status_code == 409:
+            # Since iOS 26.4 Apple acknowledges a *valid* code with 409 (securityCode.valid and a
+            # fresh X-Apple-Session-Token, which _capture already stored); X-Apple-EDP/PDP then
+            # asks for the escrow proof before the session counts as signed in.
+            valid = isinstance(data, dict) and (data.get("securityCode") or {}).get("valid") is True
+            if not (valid or resp.headers.get("X-Apple-Session-Token")):
+                raise WebAuthError(f"2FA code rejected (HTTP 409): {_reason(data) or resp.reason}")
+            if _requires_escrow(resp):
+                self._escrow()
+        elif not resp.ok:
             raise WebAuthError(f"2FA code rejected (HTTP {resp.status_code}): "
                                f"{_reason(data) or resp.reason}")
         trust = self._get(f"{AUTH_ENDPOINT}/2sv/trust", headers=self._auth_headers())
         if not trust.ok:
             raise WebAuthError(f"could not trust the session (HTTP {trust.status_code})")
         self.needs_2fa = False
+
+    def _escrow(self) -> None:
+        """POST escrow/init + escrow/complete - a second SRP password proof with an empty account
+        name, required since iOS 26.4 when a 409 carries X-Apple-EDP/X-Apple-PDP. Like
+        signin/complete, but also sends the SRP session key K; Apple answers with an updated
+        session token (_capture stores it). See RESEARCH.md "Hide My Email"."""
+        password = getattr(self, "_password", None)
+        if not password:
+            raise WebAuthError("Apple asked for the escrow password proof, but no password is "
+                               "available in this session")
+        usr = srp.User("", bytes(), hash_alg=srp.SHA256, ng_type=srp.NG_2048)
+        resp = self._post(f"{AUTH_ENDPOINT}/escrow/init", headers=self._auth_headers(),
+                          body={"a": base64.b64encode(usr.A.to_bytes(_SRP_N_LEN, "big")).decode(),
+                                "accountName": "", "protocols": ["s2k", "s2k_fo"]})
+        init = self._json_or_none(resp)
+        if not resp.ok or not isinstance(init, dict) or _reason(init):
+            raise WebAuthError(f"escrow init failed (HTTP {resp.status_code}): "
+                               f"{_reason(init) or resp.reason}")
+        m1, m2 = _srp_proof(usr, password, init)
+        resp = self._post(f"{AUTH_ENDPOINT}/escrow/complete", headers=self._auth_headers(),
+                          body={"m1": base64.b64encode(m1).decode(),
+                                "m2": base64.b64encode(m2).decode(), "c": init["c"],
+                                "k": base64.b64encode(usr.K).decode()})
+        if not resp.ok:
+            data = self._json_or_none(resp)
+            raise WebAuthError(f"escrow complete failed (HTTP {resp.status_code}): "
+                               f"{_reason(data) or resp.reason}")
 
     def account_login(self) -> dict:
         """POST .../accountLogin using the session token from signin(). Returns the parsed
@@ -249,6 +294,23 @@ class WebAuthSession:
             raise WebAuthError(f"accountLogin failed (HTTP {resp.status_code}): "
                                f"{reason or resp.reason}")
         return data
+
+
+def _requires_escrow(resp: requests.Response) -> bool:
+    """Since iOS 26.4 a 409 carrying X-Apple-EDP or X-Apple-PDP means "now prove the password
+    again via escrow/init + escrow/complete" (WebAuthSession._escrow)."""
+    return bool(resp.headers.get("X-Apple-EDP") or resp.headers.get("X-Apple-PDP"))
+
+
+def _srp_proof(usr, password: str, init: dict) -> tuple[bytes, bytes]:
+    """Run the client side of an SRP init response ({salt, b, iteration, protocol}) -> (m1, m2).
+    Leaves the session key in usr.K."""
+    salt = base64.b64decode(init["salt"])
+    usr.p = _derive_password_key(password, salt, init["iteration"], init["protocol"])
+    m1 = usr.process_challenge(salt, base64.b64decode(init["b"]))
+    if m1 is None:
+        raise WebAuthError("SRP challenge processing failed (invalid server-supplied B)")
+    return m1, usr.H_AMK
 
 
 def hsa_challenge_required(account_data: dict) -> bool:
