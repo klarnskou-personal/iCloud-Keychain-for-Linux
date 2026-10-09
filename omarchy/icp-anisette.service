@@ -3,7 +3,12 @@
 # Omarchy deliberately keeps the user out of the `docker` group (membership is root-equivalent),
 # so instead of `docker run -d --restart=always` from the user's shell, systemd owns the container
 # as root. It binds to localhost only and keeps the provisioning state in a named volume so Apple
-# sees the same "machine" across restarts (otherwise every reboot would re-trigger 2FA).
+# sees the same "machine" across restarts (otherwise every reboot would re-trigger 2FA). The volume
+# must cover the whole anisette-v3 dir: adi.pb/device.json live there, not in lib/ (mounting only
+# lib/ re-provisioned a new machine each boot and broke silent re-auth with GSA -22421).
+# Expect exactly two provisionings on a fresh volume: anisette-v3-server v2.2.2 writes its first
+# adi.pb with a bogus mode (---xr--r-T), the next start can't read it and re-provisions with
+# 0666, and from then on the machine is stable. Log in with `icp login` after the second start.
 #
 # Installed by ./install-omarchy.sh to /etc/systemd/system/icp-anisette.service
 [Unit]
@@ -18,7 +23,7 @@ Type=simple
 ExecStartPre=-/usr/bin/docker rm -f icp-anisette
 ExecStart=/usr/bin/docker run --rm --name icp-anisette \
   -p 127.0.0.1:6969:6969 \
-  -v icp-anisette-data:/home/Alcoholic/.config/anisette-v3/lib/ \
+  -v icp-anisette-state:/home/Alcoholic/.config/anisette-v3 \
   dadoum/anisette-v3-server:latest
 ExecStop=/usr/bin/docker stop icp-anisette
 Restart=on-failure
